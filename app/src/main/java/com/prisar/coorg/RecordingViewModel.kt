@@ -2,6 +2,7 @@ package com.prisar.coorg
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.speech.RecognitionListener
@@ -60,6 +61,8 @@ class RecordingViewModel : ViewModel() {
     private var wpmSamplingJob: Job? = null
     private var repository: CallRecordingRepository? = null
     private var currentPhoneNumber: String? = null
+    private var isRestarting = false
+    private var audioManager: AudioManager? = null
 
     fun startRecording(context: Context, isCallRecording: Boolean = false) {
         try {
@@ -107,6 +110,7 @@ class RecordingViewModel : ViewModel() {
             }
 
             recordingStartTime = System.currentTimeMillis()
+            isRestarting = false
             _state.value = _state.value.copy(
                 isRecording = true,
                 error = null,
@@ -128,6 +132,7 @@ class RecordingViewModel : ViewModel() {
 
     fun stopRecording(saveCallRecording: Boolean = false) {
         try {
+            isRestarting = false
             mediaRecorder?.apply {
                 stop()
                 release()
@@ -216,9 +221,22 @@ class RecordingViewModel : ViewModel() {
             return
         }
 
+        if (audioManager == null) {
+            audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        }
+
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: android.os.Bundle?) {}
+                override fun onReadyForSpeech(params: android.os.Bundle?) {
+                    viewModelScope.launch {
+                        delay(1000)
+                        audioManager?.apply {
+                            adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_UNMUTE, 0)
+                            adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+                            adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+                        }
+                    }
+                }
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
@@ -261,20 +279,48 @@ class RecordingViewModel : ViewModel() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+            putExtra("android.speech.extra.DICTATION_MODE", true)
         }
 
+        audioManager?.apply {
+            adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
+            adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+            adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+        }
         speechRecognizer?.startListening(intent)
     }
 
     private fun restartSpeechRecognition(context: Context) {
+        if (isRestarting) return
+
         try {
+            isRestarting = true
             speechRecognizer?.stopListening()
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+
+            viewModelScope.launch {
+                delay(100)
+                try {
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                        putExtra("android.speech.extra.DICTATION_MODE", true)
+                    }
+                    audioManager?.apply {
+                        adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
+                        adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+                        adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
+                    }
+                    speechRecognizer?.startListening(intent)
+                } finally {
+                    isRestarting = false
+                }
             }
-            speechRecognizer?.startListening(intent)
         } catch (e: Exception) {
+            isRestarting = false
         }
     }
 
