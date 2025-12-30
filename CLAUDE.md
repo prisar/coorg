@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Coorg is a voice recording Android app that calculates speaking rate in words per minute. It uses MediaRecorder for audio capture and SpeechRecognizer for real-time speech-to-text transcription.
+Coorg is a voice recording Android app that calculates speaking rate in words per minute and displays a realtime graph showing WPM trends over time. It uses MediaRecorder for audio capture and SpeechRecognizer for real-time speech-to-text transcription.
 
 ## Technology Stack
 
 - **Language**: Kotlin
 - **UI**: Jetpack Compose with Material 3
 - **Architecture**: MVVM with ViewModel and StateFlow
+- **Charting**: Vico library for realtime graph visualization
 - **Permissions**: Accompanist Permissions library
 - **APIs**: Android MediaRecorder, SpeechRecognizer
 - **Build**: Gradle with Kotlin DSL, version catalogs
@@ -76,6 +77,7 @@ data class RecordingState(
     val wordCount: Int = 0,
     val recordingDurationSeconds: Int = 0,
     val wordsPerMinute: Int = 0,
+    val wpmDataPoints: List<Pair<Int, Int>> = emptyList(),
     val error: String? = null
 )
 ```
@@ -102,10 +104,18 @@ State flows from ViewModel to UI via StateFlow:
 - WPM calculation: `(wordCount / durationSeconds) * 60`
 
 **Recording Lifecycle**:
-1. `startRecording()` - Creates MediaRecorder and SpeechRecognizer, starts both
+1. `startRecording()` - Creates MediaRecorder and SpeechRecognizer, starts both, launches WPM sampling coroutine
 2. SpeechRecognizer auto-restarts after each result to enable continuous recognition
-3. `stopRecording()` - Stops MediaRecorder, destroys SpeechRecognizer, calculates final WPM
-4. `onCleared()` - Cleanup in ViewModel when destroyed
+3. WPM sampling coroutine runs every 3 seconds, collecting data points for graph
+4. `stopRecording()` - Stops MediaRecorder, cancels sampling job, destroys SpeechRecognizer, calculates final WPM
+5. `onCleared()` - Cleanup in ViewModel when destroyed
+
+**WPM Sampling and Graph**:
+- Background coroutine samples WPM every 3 seconds during recording
+- Each sample is a pair of (durationSeconds, wpm) added to wpmDataPoints list
+- Data points feed the real-time graph displayed in UI
+- Graph uses Vico library (CartesianChartHost with LineCartesianLayer)
+- Graph only visible when data points exist
 
 ### Permissions
 
@@ -122,10 +132,18 @@ Permission handling in RecordingScreen.kt:
 **RecordingScreen.kt** displays:
 - Permission request card (if needed)
 - Speaking rate in large text (words per minute)
+- Real-time WPM graph (WpmChart component) showing trends over time
 - Word count and duration in info card
 - Recognized text in scrollable card
 - Start/Stop recording button
 - Error messages in error-styled card
+
+**WpmChart.kt** composable:
+- Uses Vico library for chart rendering
+- CartesianChartModelProducer with line series
+- Updates reactively via LaunchedEffect when dataPoints change
+- 200dp height chart with start axis (Y) and bottom axis (X)
+- Only renders when data points are available
 
 All components use Material 3 styling and responsive layouts with Compose.
 
@@ -163,6 +181,34 @@ mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 }
 ```
 
+### WPM Chart with Vico
+```kotlin
+@Composable
+fun WpmChart(dataPoints: List<Pair<Int, Int>>) {
+    val modelProducer = remember { CartesianChartModelProducer() }
+
+    LaunchedEffect(dataPoints) {
+        if (dataPoints.isNotEmpty()) {
+            modelProducer.runTransaction {
+                lineSeries {
+                    series(dataPoints.map { it.second })
+                }
+            }
+        }
+    }
+
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberLineCartesianLayer(),
+            startAxis = rememberStartAxis(),
+            bottomAxis = rememberBottomAxis(),
+        ),
+        modelProducer = modelProducer,
+        modifier = Modifier.fillMaxWidth().height(200.dp)
+    )
+}
+```
+
 ## Dependencies
 
 Dependencies are managed via `gradle/libs.versions.toml`:
@@ -171,8 +217,12 @@ Key versions:
 - Android Gradle Plugin: 8.13.2
 - Kotlin: 2.0.21
 - Compose BOM: 2024.09.00
-- Accompanist Permissions: 0.36.0 (direct dependency in app/build.gradle.kts)
-- Lifecycle ViewModel Compose: 2.8.7 (direct dependency in app/build.gradle.kts)
+- Vico (charting library): 2.0.0-alpha.28
+  - vico-compose: Compose integration
+  - vico-compose-m3: Material 3 theme support
+  - vico-core: Core charting functionality
+- Accompanist Permissions: 0.36.0
+- Lifecycle ViewModel Compose: 2.8.7
 
 API levels:
 - minSdk: 24
