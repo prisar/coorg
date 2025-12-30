@@ -16,16 +16,37 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 import kotlin.math.roundToInt
 
+enum class RecordingMode {
+    VOICE,
+    CALL
+}
+
+data class CallRecording(
+    val id: String = UUID.randomUUID().toString(),
+    val timestamp: Long,
+    val duration: Int,
+    val filePath: String,
+    val phoneNumber: String?,
+    val transcription: String,
+    val wordCount: Int,
+    val averageWpm: Int,
+    val wpmDataPoints: List<Pair<Int, Int>>
+)
+
 data class RecordingState(
+    val recordingMode: RecordingMode = RecordingMode.VOICE,
     val isRecording: Boolean = false,
     val recognizedText: String = "",
     val wordCount: Int = 0,
     val recordingDurationSeconds: Int = 0,
     val wordsPerMinute: Int = 0,
     val wpmDataPoints: List<Pair<Int, Int>> = emptyList(),
-    val error: String? = null
+    val error: String? = null,
+    val isInCall: Boolean = false,
+    val callRecordings: List<CallRecording> = emptyList()
 )
 
 class RecordingViewModel : ViewModel() {
@@ -37,11 +58,20 @@ class RecordingViewModel : ViewModel() {
     private var recordingStartTime: Long = 0
     private var audioFile: File? = null
     private var wpmSamplingJob: Job? = null
+    private var repository: CallRecordingRepository? = null
+    private var currentPhoneNumber: String? = null
 
-    fun startRecording(context: Context) {
+    fun startRecording(context: Context, isCallRecording: Boolean = false) {
         try {
-            val cacheDir = context.cacheDir
-            audioFile = File.createTempFile("recording", ".3gp", cacheDir)
+            if (repository == null) {
+                repository = CallRecordingRepository(context)
+            }
+
+            audioFile = if (isCallRecording) {
+                repository?.createRecordingFile(System.currentTimeMillis(), currentPhoneNumber)
+            } else {
+                File.createTempFile("recording", ".3gp", context.cacheDir)
+            }
 
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(context)
@@ -49,9 +79,28 @@ class RecordingViewModel : ViewModel() {
                 @Suppress("DEPRECATION")
                 MediaRecorder()
             }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+                val audioSource = if (isCallRecording) {
+                    try {
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                    } catch (e: Exception) {
+                        MediaRecorder.AudioSource.MIC
+                    }
+                } else {
+                    MediaRecorder.AudioSource.MIC
+                }
+
+                setAudioSource(audioSource)
+
+                if (isCallRecording) {
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setAudioEncodingBitRate(128000)
+                    setAudioSamplingRate(44100)
+                } else {
+                    setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+                }
+
                 setOutputFile(audioFile?.absolutePath)
                 prepare()
                 start()
@@ -77,7 +126,7 @@ class RecordingViewModel : ViewModel() {
         }
     }
 
-    fun stopRecording() {
+    fun stopRecording(saveCallRecording: Boolean = false) {
         try {
             mediaRecorder?.apply {
                 stop()
@@ -98,6 +147,23 @@ class RecordingViewModel : ViewModel() {
                 ((currentWordCount.toFloat() / durationSeconds) * 60).roundToInt()
             } else {
                 0
+            }
+
+            if (saveCallRecording && audioFile != null) {
+                val callRecording = CallRecording(
+                    timestamp = recordingStartTime,
+                    duration = durationSeconds,
+                    filePath = audioFile!!.absolutePath,
+                    phoneNumber = currentPhoneNumber,
+                    transcription = _state.value.recognizedText,
+                    wordCount = currentWordCount,
+                    averageWpm = wpm,
+                    wpmDataPoints = _state.value.wpmDataPoints
+                )
+                repository?.saveRecording(callRecording)
+
+                val updatedRecordings = repository?.loadAllRecordings() ?: emptyList()
+                _state.value = _state.value.copy(callRecordings = updatedRecordings)
             }
 
             _state.value = _state.value.copy(
@@ -209,6 +275,45 @@ class RecordingViewModel : ViewModel() {
             }
             speechRecognizer?.startListening(intent)
         } catch (e: Exception) {
+        }
+    }
+
+    fun switchMode(mode: RecordingMode) {
+        _state.value = _state.value.copy(recordingMode = mode)
+    }
+
+    fun onCallStarted(context: Context, phoneNumber: String?) {
+        if (repository == null) {
+            repository = CallRecordingRepository(context)
+        }
+        currentPhoneNumber = phoneNumber
+        _state.value = _state.value.copy(
+            isInCall = true,
+            recordingMode = RecordingMode.CALL
+        )
+        startRecording(context, isCallRecording = true)
+    }
+
+    fun onCallEnded() {
+        _state.value = _state.value.copy(isInCall = false)
+        if (_state.value.isRecording && _state.value.recordingMode == RecordingMode.CALL) {
+            stopRecording(saveCallRecording = true)
+        }
+    }
+
+    fun loadCallRecordings(context: Context) {
+        if (repository == null) {
+            repository = CallRecordingRepository(context)
+        }
+        val recordings = repository?.loadAllRecordings() ?: emptyList()
+        _state.value = _state.value.copy(callRecordings = recordings)
+    }
+
+    fun deleteRecording(id: String) {
+        val success = repository?.deleteRecording(id) ?: false
+        if (success) {
+            val updatedRecordings = _state.value.callRecordings.filter { it.id != id }
+            _state.value = _state.value.copy(callRecordings = updatedRecordings)
         }
     }
 

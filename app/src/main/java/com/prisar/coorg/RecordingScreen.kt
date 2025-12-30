@@ -1,20 +1,18 @@
 package com.prisar.coorg
 
 import android.Manifest
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,8 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
 import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStartAxis
@@ -40,149 +37,94 @@ import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun RecordingScreen(
-    modifier: Modifier = Modifier,
-    viewModel: RecordingViewModel = viewModel()
+    viewModel: RecordingViewModel,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
-    val audioPermissionState = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    val permissionsState = rememberMultiplePermissionsState(
+        permissions = listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
+        )
+    )
+
+    LaunchedEffect(state.recordingMode) {
+        if (state.recordingMode == RecordingMode.CALL) {
+            viewModel.loadCallRecordings(context)
+        }
+    }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = modifier.fillMaxSize()
     ) {
-        Text(
-            text = "Voice Recording",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        if (!audioPermissionState.status.isGranted) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
+        if (!permissionsState.allPermissionsGranted) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Microphone permission required",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { audioPermissionState.launchPermissionRequest() }) {
-                        Text("Grant Permission")
-                    }
-                }
-            }
-        } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Speaking Rate",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "${state.wordsPerMinute}",
-                        style = MaterialTheme.typography.displayLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "words per minute",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            WpmChart(dataPoints = state.wpmDataPoints)
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    InfoRow("Word Count", state.wordCount.toString())
-                    Spacer(modifier = Modifier.height(8.dp))
-                    InfoRow("Duration", "${state.recordingDurationSeconds}s")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            if (state.recognizedText.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "Recognized Text",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = state.recognizedText,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-            }
-
-            Button(
-                onClick = {
-                    if (state.isRecording) {
-                        viewModel.stopRecording()
-                    } else {
-                        viewModel.startRecording(context)
-                    }
-                },
-                modifier = Modifier.size(120.dp, 56.dp)
-            ) {
-                Text(
-                    text = if (state.isRecording) "Stop" else "Start",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            if (state.error != null) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(32.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer
                     )
                 ) {
-                    Text(
-                        text = state.error ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Permissions Required",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "This app needs microphone and phone state permissions to record voice and calls",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = { permissionsState.launchMultiplePermissionRequest() }) {
+                            Text("Grant Permissions")
+                        }
+                    }
                 }
+            }
+        } else {
+            TabRow(
+                selectedTabIndex = when (state.recordingMode) {
+                    RecordingMode.VOICE -> 0
+                    RecordingMode.CALL -> 1
+                }
+            ) {
+                Tab(
+                    selected = state.recordingMode == RecordingMode.VOICE,
+                    onClick = { viewModel.switchMode(RecordingMode.VOICE) },
+                    text = { Text("Voice") }
+                )
+                Tab(
+                    selected = state.recordingMode == RecordingMode.CALL,
+                    onClick = {
+                        viewModel.switchMode(RecordingMode.CALL)
+                        viewModel.loadCallRecordings(context)
+                    },
+                    text = { Text("Call") }
+                )
+            }
+
+            when (state.recordingMode) {
+                RecordingMode.VOICE -> VoiceRecordingTab(
+                    state = state,
+                    onStartRecording = { viewModel.startRecording(context) },
+                    onStopRecording = { viewModel.stopRecording() }
+                )
+                RecordingMode.CALL -> CallRecordingTab(
+                    state = state,
+                    onDeleteRecording = { id -> viewModel.deleteRecording(id) }
+                )
             }
         }
     }
