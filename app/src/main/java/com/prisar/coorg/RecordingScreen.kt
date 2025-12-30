@@ -17,8 +17,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +29,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
+import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottomAxis
+import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStartAxis
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
+import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
+import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -99,6 +108,10 @@ fun RecordingScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            WpmChart(dataPoints = state.wpmDataPoints)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -187,5 +200,48 @@ fun InfoRow(label: String, value: String) {
             text = value,
             style = MaterialTheme.typography.bodyLarge
         )
+    }
+}
+
+@Composable
+fun WpmChart(dataPoints: List<Pair<Int, Int>>) {
+    val modelProducer = remember { CartesianChartModelProducer() }
+
+    LaunchedEffect(dataPoints) {
+        if (dataPoints.isNotEmpty()) {
+            modelProducer.runTransaction {
+                lineSeries {
+                    series(dataPoints.map { it.second })
+                }
+            }
+        }
+    }
+
+    if (dataPoints.isNotEmpty()) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = "WPM Over Time",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                CartesianChartHost(
+                    chart = rememberCartesianChart(
+                        rememberLineCartesianLayer(),
+                        startAxis = rememberStartAxis(),
+                        bottomAxis = rememberBottomAxis(),
+                    ),
+                    modelProducer = modelProducer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                )
+            }
+        }
     }
 }

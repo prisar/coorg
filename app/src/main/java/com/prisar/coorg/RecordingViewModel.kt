@@ -8,9 +8,13 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -20,6 +24,7 @@ data class RecordingState(
     val wordCount: Int = 0,
     val recordingDurationSeconds: Int = 0,
     val wordsPerMinute: Int = 0,
+    val wpmDataPoints: List<Pair<Int, Int>> = emptyList(),
     val error: String? = null
 )
 
@@ -31,6 +36,7 @@ class RecordingViewModel : ViewModel() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var recordingStartTime: Long = 0
     private var audioFile: File? = null
+    private var wpmSamplingJob: Job? = null
 
     fun startRecording(context: Context) {
         try {
@@ -57,10 +63,12 @@ class RecordingViewModel : ViewModel() {
                 error = null,
                 recognizedText = "",
                 wordCount = 0,
-                wordsPerMinute = 0
+                wordsPerMinute = 0,
+                wpmDataPoints = emptyList()
             )
 
             startSpeechRecognition(context)
+            startWpmSampling()
         } catch (e: Exception) {
             _state.value = _state.value.copy(
                 error = "Recording failed: ${e.message}",
@@ -76,6 +84,9 @@ class RecordingViewModel : ViewModel() {
                 release()
             }
             mediaRecorder = null
+
+            wpmSamplingJob?.cancel()
+            wpmSamplingJob = null
 
             speechRecognizer?.destroy()
             speechRecognizer = null
@@ -99,6 +110,37 @@ class RecordingViewModel : ViewModel() {
                 error = "Stop recording failed: ${e.message}",
                 isRecording = false
             )
+        }
+    }
+
+    private fun calculateCurrentWpm(): Int {
+        val currentDuration = ((System.currentTimeMillis() - recordingStartTime) / 1000).toInt()
+        val currentWordCount = _state.value.wordCount
+        return if (currentDuration > 0) {
+            ((currentWordCount.toFloat() / currentDuration) * 60).roundToInt()
+        } else {
+            0
+        }
+    }
+
+    private fun startWpmSampling() {
+        wpmSamplingJob = viewModelScope.launch {
+            while (_state.value.isRecording) {
+                delay(3000)
+
+                if (_state.value.isRecording) {
+                    val currentDuration = ((System.currentTimeMillis() - recordingStartTime) / 1000).toInt()
+                    val currentWpm = calculateCurrentWpm()
+
+                    val updatedDataPoints = _state.value.wpmDataPoints + (currentDuration to currentWpm)
+
+                    _state.value = _state.value.copy(
+                        wpmDataPoints = updatedDataPoints,
+                        recordingDurationSeconds = currentDuration,
+                        wordsPerMinute = currentWpm
+                    )
+                }
+            }
         }
     }
 
@@ -172,6 +214,7 @@ class RecordingViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        wpmSamplingJob?.cancel()
         mediaRecorder?.release()
         speechRecognizer?.destroy()
     }
